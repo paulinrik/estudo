@@ -60,7 +60,23 @@
         <div class="thr-wrap"><table class="thr" id="thrTable"></table></div>
         <p class="form-msg" id="thrMsg" role="status"></p>
         <button class="btn btn-ghost btn-small" type="button" id="thrReset">Restaurar padrão</button>
-        <div class="backup-area">
+        <div class="cloud-area">
+          <h3 class="settings-heading">Conta e sincronização</h3>
+          <p class="note">Entre com a mesma conta do Livro Caixa para acessar seus estudos em outros aparelhos.</p>
+          <p class="auth-status" id="authStatus" role="status" aria-live="polite">Verificando serviço de nuvem…</p>
+          <form id="authForm" class="auth-form">
+            <label for="authEmail">E-mail</label>
+            <input id="authEmail" type="email" autocomplete="email" required>
+            <label for="authPassword">Senha</label>
+            <input id="authPassword" type="password" autocomplete="current-password" minlength="6" required>
+            <button class="btn btn-primary btn-small" id="authSubmit" type="submit">Entrar</button>
+          </form>
+          <button class="link-btn" id="authModeToggle" type="button">Criar conta</button>
+          <div id="authSignedIn" hidden>
+            <p class="auth-user" id="authUserLabel"></p>
+            <button class="btn btn-ghost btn-small" id="authSignOut" type="button">Sair da conta</button>
+          </div>
+        </div>        <div class="backup-area">
           <h3 class="settings-heading">Backup dos lançamentos</h3>
           <p class="note">Exporte seus lançamentos para guardar uma cópia ou importe um arquivo de backup neste aparelho.</p>
           <div class="backup-actions">
@@ -131,8 +147,10 @@
 </main>
 
 <div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>
+
 
 
