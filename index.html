@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e1117">
+  <title>Mapa de Estudo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body><main class="app" id="app">
+  <header class="top">
+    <div>
+      <h1>Mapa de Estudo</h1>
+      <p class="today" id="todayLabel"></p>
+    </div>
+    <div class="top-actions"><div class="streak" id="streak" title="Dias seguidos com pelo menos a faixa verde"></div><button class="btn btn-ghost settings-trigger" id="settingsTrigger" type="button" aria-controls="settingsBox" aria-expanded="false">⚙ Configurações</button></div>
+  </header>
+
+  <div class="banner" id="demoBanner" hidden>
+    <p>Mostrando dados de exemplo para você ver o mapa funcionando. Eles somem assim que você salvar a primeira sessão.</p>
+    <button class="btn btn-ghost btn-small" type="button" id="hideDemo">Ocultar exemplo</button>
+  </div>
+
+  <div class="col">
+    <section class="card sec-timer" aria-labelledby="timerH">
+      <div class="timer-top">
+        <h2 class="eyebrow" id="timerH">Cronômetro</h2>
+        <span class="pill" id="pill" data-s="idle"><i class="dot"></i><span id="pillText">Parado</span></span>
+      </div>
+      <div class="clocks">
+        <div class="clock" id="clockStudy">
+          <span class="clock-label">Estudo</span>
+          <span class="clock-digits" id="studyClock" role="timer" aria-live="off">00:00:00</span>
+        </div>
+        <div class="clock" id="clockRest">
+          <span class="clock-label">Descanso</span>
+          <span class="clock-digits" id="restClock" role="timer" aria-live="off">00:00:00</span>
+        </div>
+      </div>
+      <div class="timer-actions">
+        <button class="btn btn-primary" type="button" id="btnMain">Iniciar estudo</button>
+        <button class="btn btn-ghost" type="button" id="btnFinish" hidden>Finalizar e salvar</button>
+      </div>
+      <p class="timer-foot" id="timerFoot"></p>
+    </section>
+
+    <section class="card sec-scores" aria-labelledby="scoreH">
+      <h2 class="eyebrow" id="scoreH">Pontuação</h2>
+      <div class="score-list" id="scoreList"></div>
+    </section>
+
+    <details class="card settings sec-settings" id="settingsBox">
+      <summary>Configurações</summary>
+      <div class="settings-body">
+        <h3 class="settings-heading">Faixas de pontuação</h3>
+        <p class="note">Cada cor começa a partir do tempo indicado, em horas. Cinza é tudo abaixo da faixa verde. O tempo de descanso não entra na conta.</p>
+        <div class="thr-wrap"><table class="thr" id="thrTable"></table></div>
+        <p class="form-msg" id="thrMsg" role="status"></p>
+        <button class="btn btn-ghost btn-small" type="button" id="thrReset">Restaurar padrão</button>
+        <div class="backup-area">
+          <h3 class="settings-heading">Backup dos lançamentos</h3>
+          <p class="note">Exporte seus lançamentos para guardar uma cópia ou importe um arquivo de backup neste aparelho.</p>
+          <div class="backup-actions">
+            <button class="btn btn-ghost btn-small" type="button" id="exportBackup">Exportar backup</button>
+            <button class="btn btn-ghost btn-small" type="button" id="importBackup">Importar backup</button>
+            <input class="sr" id="backupFile" type="file" accept="application/json,.json">
+          </div>
+          <p class="form-msg" id="backupMsg" role="status"></p>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="col">
+    <section class="card sec-cal" aria-label="Calendário de estudo">
+      <div class="cal-head">
+        <div class="cal-nav">
+          <button class="icon-btn" type="button" id="prevM" aria-label="Mês anterior">&#8249;</button>
+          <h2 class="cal-title" id="monthTitle"></h2>
+          <button class="icon-btn" type="button" id="nextM" aria-label="Próximo mês">&#8250;</button>
+        </div>
+        <div class="cal-sum">
+          <span class="cal-total" id="monthTotal"></span>
+          <span class="chip" id="monthChip"></span>
+          <button class="btn btn-ghost btn-small" type="button" id="todayBtn">Hoje</button>
+        </div>
+      </div>
+
+      <div class="cal-grid" id="calGrid" role="group" aria-label="Dias do mês"></div>
+
+      <div class="legend-wrap">
+        <p class="legend-title">Faixas por dia</p>
+        <ul class="legend" id="legend"></ul>
+        <p class="legend-note">Semana e mês têm faixas próprias. Ajuste todas em Faixas de pontuação.</p>
+      </div>
+
+      <div class="detail" id="dayDetail"></div>
+
+      <details class="add" id="addBox">
+        <summary>Adicionar tempo manualmente</summary>
+        <form id="addForm" novalidate>
+          <p class="add-for" id="addFor"></p>
+          <div class="add-row">
+            <label for="addH">Estudo</label>
+            <input id="addH" type="number" inputmode="numeric" min="0" max="23" step="1" placeholder="0"><span class="u">h</span>
+            <input id="addM" type="number" inputmode="numeric" min="0" max="59" step="1" placeholder="0"><span class="u">min</span>
+          </div>
+          <div class="add-row">
+            <label for="addR">Descanso</label>
+            <input id="addR" type="number" inputmode="numeric" min="0" max="600" step="1" placeholder="0"><span class="u">min</span>
+          </div>
+          <button class="btn btn-ghost btn-small" type="submit">Adicionar ao dia</button>
+          <p class="form-msg" id="addMsg" role="status"></p>
+        </form>
+      </details>
+    </section>
+
+    <section class="card sec-year" aria-labelledby="yearH">
+      <div class="year-head">
+        <h2 class="eyebrow" id="yearH"><span id="yearTitle"></span></h2>
+        <span class="year-total" id="yearTotal"></span>
+      </div>
+      <div class="months" id="monthTiles"></div>
+    </section>
+  </div>
+
+  <footer class="foot" id="foot"></footer>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span></div>
+<script src="app.js" defer></script>
+</body>
+</html>
+
+
