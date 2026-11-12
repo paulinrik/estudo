@@ -10,7 +10,7 @@ const SCALES=['day','week','month'];
 const SCALE_LABEL={day:'Dia',week:'Semana',month:'Mês'};
 const DEFAULTS={day:[0.25,1,2,4,6],week:[2,8,12,16,24],month:[14,25,60,100,150]};
 const KEY_RE=/^\d{4}-\d{2}-\d{2}$/;
-const LS={days:'estudo:v1:days',timer:'estudo:v1:timer',settings:'estudo:v1:settings',demoOff:'estudo:v1:demoOff'};
+const LS={days:'estudo:v1:days',timer:'estudo:v1:timer',settings:'estudo:v1:settings',demoOff:'estudo:v1:demoOff',changedAt:'estudo:v1:changedAt',cloudUser:'estudo:v1:cloudUser'};
 
 /* ---------- helpers ---------- */
 const $=id=>document.getElementById(id);
@@ -116,14 +116,11 @@ let settings=sanitizeSettings(lsGet(LS.settings))||clone(DEFAULTS);
 let timer=sanitizeTimer(lsGet(LS.timer))||idleTimer(0);
 const nowD=new Date();
 const st={
-  mode:'connecting',   // connecting | remote | local
-  db:null,synced:false,slow:false,syncErr:false,
+  mode:'local',synced:false,syncErr:false,
   demoOff:!!lsGet(LS.demoOff),useDemo:false,live:{},
   view:{y:nowD.getFullYear(),m:nowD.getMonth()},
   todayKey:dayKey(nowD),sel:dayKey(nowD),confirmDel:null
-};
-
-/* ---------- time spans (a session can cross midnight) ---------- */
+};/* ---------- time spans (a session can cross midnight) ---------- */
 function spanDays(type,s,e,out){
   let cur=s;
   while(cur<e){
@@ -197,56 +194,111 @@ function streakDays(){
   return n;
 }
 
-/* ---------- persistence ---------- */
-let q=Promise.resolve();
-function enqueue(fn){
-  q=q.then(async()=>{
-    try{await fn();}
-    catch(e1){await new Promise(r=>setTimeout(r,1500+Math.random()*1000));await fn();}
-  }).then(()=>{
-    if(st.syncErr){st.syncErr=false;renderFoot();}
-  },()=>{
-    st.syncErr=true;renderFoot();
-    toast('Não deu para sincronizar agora. A alteração ficou salva só neste navegador.');
-  });
-}
-function remoteOn(){return st.mode==='remote'&&!!st.db;}
-function saveDay(key){
-  lsSet(LS.days,days);
-  if(!remoteOn())return;
-  enqueue(async()=>{
-    const rec=days[key];
-    const ref=st.db.doc('days/'+key);
-    if(rec&&rec.sessions.length)await ref.set({sessions:clone(rec.sessions)});
-    else await ref.delete();
-  });
-}
-function saveTimer(){
-  lsSet(LS.timer,timer);
-  pushTimer();
-}
-function pushTimer(){
-  if(!remoteOn())return;
-  enqueue(async()=>{await st.db.doc('meta/timer').set(clone(timer));});
-}
-function saveSettings(){
-  lsSet(LS.settings,settings);
-  pushSettings();
-}
-function pushSettings(){
-  if(!remoteOn())return;
-  enqueue(async()=>{await st.db.doc('meta/settings').set(clone(settings));});
-}
-function migrateDays(){
-  for(const k of Object.keys(days)){
-    enqueue(async()=>{
-      const rec=days[k];
-      if(rec&&rec.sessions.length)await st.db.doc('days/'+k).set({sessions:clone(rec.sessions)});
+/* ---------- local and cloud persistence ---------- */
+let supabase=null,authUser=null,authMode='signin',handledUserId=null;
+let cloudQueue=Promise.resolve(),cloudSaveTimer=null;
+let localChangedAt=Number(lsGet(LS.changedAt))||0;
+const SUPABASE_URL='https://qtupublxssisrzfalaij.supabase.co';
+const SUPABASE_KEY='sb_publishable_7N_5ILhk0C79VPAu7FiWMw_Qfz6ERSN';
+const CLOUD_TABLE='estudo_dados';
+function touchLocal(){localChangedAt=Date.now();lsSet(LS.changedAt,localChangedAt);}
+function scheduleCloudSave(){
+  if(!supabase||!authUser)return;
+  clearTimeout(cloudSaveTimer);
+  $('authStatus').textContent='Salvando na nuvem…';
+  cloudSaveTimer=setTimeout(()=>{
+    cloudQueue=cloudQueue.then(saveCloudNow).catch(err=>{
+      st.syncErr=true;
+      setAuthMessage('Salvo neste aparelho. Falha na nuvem: '+(err.message||'verifique a conexão.'),true);
+      renderFoot();
     });
+  },450);
+}
+async function saveCloudNow(){
+  if(!supabase||!authUser)return;
+  const userId=authUser.id;
+  const payload={user_id:userId,dados:{days:days,settings:settings},updated_at:new Date().toISOString()};
+  const {error}=await supabase.from(CLOUD_TABLE).upsert(payload,{onConflict:'user_id'});
+  if(error)throw error;
+  if(!authUser||authUser.id!==userId)return;
+  st.syncErr=false;st.synced=true;lsSet(LS.cloudUser,userId);
+  $('authStatus').textContent='Sincronizado com a nuvem';renderFoot();
+}
+function saveDay(key){lsSet(LS.days,days);touchLocal();scheduleCloudSave();}
+function saveTimer(){lsSet(LS.timer,timer);}
+function saveSettings(){lsSet(LS.settings,settings);touchLocal();scheduleCloudSave();}
+function mergeDays(primary,secondary){
+  const merged=sanitizeDays(primary),extra=sanitizeDays(secondary);
+  for(const key of Object.keys(extra)){
+    const target=merged[key]||(merged[key]={sessions:[]});
+    const seen=new Set(target.sessions.map(s=>[s.id,s.at,s.study,s.rest].join(':')));
+    for(const session of extra[key].sessions){
+      const sig=[session.id,session.at,session.study,session.rest].join(':');
+      if(!seen.has(sig)){target.sessions.push(session);seen.add(sig);}
+    }
+    target.sessions.sort((a,b)=>a.at-b.at);
+  }
+  return merged;
+}
+function setAuthMessage(message,isError){
+  $('authStatus').textContent=message;
+  $('authStatus').className='auth-status'+(isError?' err':'');
+}
+function renderAuth(){
+  const signedIn=!!authUser;
+  $('authForm').hidden=signedIn;$('authModeToggle').hidden=signedIn;$('authSignedIn').hidden=!signedIn;
+  $('authUserLabel').textContent=signedIn?'Conectado como '+(authUser.email||'sua conta'):'';
+  $('authSubmit').textContent=authMode==='signup'?'Criar conta':'Entrar';
+  $('authModeToggle').textContent=authMode==='signup'?'Já tenho conta · Entrar':'Criar conta';
+}
+async function handleCloudSession(session){
+  if(!session||!session.user||handledUserId===session.user.id)return;
+  handledUserId=session.user.id;authUser=session.user;
+  st.mode='connecting';st.synced=false;st.syncErr=false;renderAuth();setAuthMessage('Buscando seus dados na nuvem…',false);renderFoot();
+  try{
+    const previousAccount=lsGet(LS.cloudUser),keepLocal=!previousAccount||previousAccount===authUser.id;
+    const localDays=keepLocal?days:{},localSettings=keepLocal?settings:clone(DEFAULTS);
+    const hasLocalSettings=keepLocal&&!!lsGet(LS.settings),localTimestamp=keepLocal?(Number(lsGet(LS.changedAt))||0):0;
+    const {data,error}=await supabase.from(CLOUD_TABLE).select('dados,updated_at').eq('user_id',authUser.id).maybeSingle();
+    if(error)throw error;
+    const remote=data&&data.dados;
+    if(remote&&typeof remote==='object'){
+      days=mergeDays(sanitizeDays(remote.days),localDays);
+      const remoteSettings=sanitizeSettings(remote.settings),remoteAt=Date.parse(data.updated_at)||0;
+      settings=hasLocalSettings&&localTimestamp>remoteAt?localSettings:(remoteSettings||localSettings);
+    }else{days=sanitizeDays(localDays);settings=localSettings;}
+    lsSet(LS.days,days);lsSet(LS.settings,settings);lsSet(LS.cloudUser,authUser.id);touchLocal();
+    st.mode='remote';st.synced=true;fillSettings();renderAll();setAuthMessage('Dados do aparelho e da nuvem conferidos.',false);
+    await saveCloudNow();
+  }catch(err){
+    st.mode='local';st.synced=false;st.syncErr=true;
+    setAuthMessage('Não foi possível sincronizar. Confira a tabela estudo_dados e a conexão: '+(err.message||'erro desconhecido'),true);renderAll();
   }
 }
+function initializeCloud(){
+  st.mode='local';
+  if(!window.supabase||typeof window.supabase.createClient!=='function'){
+    setAuthMessage('Não foi possível carregar o serviço de nuvem.',true);renderAll();return;
+  }
+  supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+  supabase.auth.onAuthStateChange((event,session)=>{
+    if(event==='SIGNED_OUT'){
+      authUser=null;handledUserId=null;st.mode='local';st.synced=false;st.syncErr=false;
+      renderAuth();setAuthMessage('Saiu da conta. Os dados deste aparelho continuam salvos localmente.',false);renderAll();
+    }else if(session&&(event==='SIGNED_IN'||event==='TOKEN_REFRESHED'||event==='INITIAL_SESSION')){
+      handleCloudSession(session);
+    }else if(event==='INITIAL_SESSION'){
+      authUser=null;renderAuth();setAuthMessage('Entre com a mesma conta do Livro Caixa para sincronizar.',false);
+    }
+  });
+  supabase.auth.getSession().then(({data,error})=>{
+    if(error)throw error;
+    if(data&&data.session)handleCloudSession(data.session);
+    else{authUser=null;renderAuth();setAuthMessage('Entre com a mesma conta do Livro Caixa para sincronizar.',false);}
+  }).catch(err=>setAuthMessage('Não foi possível verificar sua conta: '+(err.message||'erro desconhecido'),true));
+}
 
-/* ---------- timer actions ---------- */
+/* ---------- timer actions ---------- *//* ---------- timer actions ---------- */
 function startStudy(){
   const now=Date.now();
   timer={status:'study',startedAt:now,segs:[],cur:{t:'study',s:now},updatedAt:now};
@@ -431,19 +483,10 @@ function renderYear(){
 }
 
 function renderFoot(){
-  let t;
-  if(st.mode==='remote'){
-    if(st.syncErr)t='Não foi possível sincronizar agora. As alterações recentes ficaram salvas neste navegador.';
-    else if(!st.synced)t=st.slow?'Ainda não foi possível conectar ao armazenamento. Mostrando os dados salvos neste navegador.':'Conectando ao seu armazenamento…';
-    else t='Dados salvos e sincronizados entre seus aparelhos.';
-  }else if(st.mode==='connecting'){
-    t='Conectando ao seu armazenamento…';
-  }else{
-    t='Dados salvos só neste navegador. Para sincronizar entre aparelhos, abra o app logado na conta que o criou.';
-  }
-  $('foot').textContent=t;
+  $('foot').textContent=st.mode==='remote'
+    ?(st.syncErr?'Sem conexão com a nuvem agora. Os dados continuam salvos neste aparelho.':'Dados salvos e sincronizados com sua conta.')
+    :'Dados salvos neste aparelho. Entre na sua conta para sincronizar entre dispositivos.';
 }
-
 function renderDerived(){
   st.useDemo=showDemo();
   st.live=liveSpans(Date.now());
@@ -516,9 +559,9 @@ $('backupFile').addEventListener('change',async e=>{
     if(!Object.keys(imported).length)throw new Error('empty');
     if(!confirm('Importar '+Object.values(imported).reduce((n,d)=>n+d.sessions.length,0)+' lançamentos? Os lançamentos atuais serão substituídos.'))return;
     days=imported;
-    if(data.format==='mapa-de-estudo-backup'&&data.settings){settings=sanitizeSettings(data.settings)||clone(DEFAULTS);lsSet(LS.settings,settings);fillSettings();pushSettings();}
+    if(data.format==='mapa-de-estudo-backup'&&data.settings){settings=sanitizeSettings(data.settings)||clone(DEFAULTS);lsSet(LS.settings,settings);fillSettings();}
     lsSet(LS.days,days);
-    if(remoteOn())for(const key of Object.keys(days))saveDay(key);
+    touchLocal();scheduleCloudSave();
     st.demoOff=true;lsSet(LS.demoOff,true);st.sel=dayKey(new Date());
     renderAll();$('backupMsg').textContent='Backup importado. Os lançamentos atuais foram substituídos.';
   }catch(err){$('backupMsg').textContent='Não foi possível importar. Escolha um backup JSON válido do Mapa de Estudo.';}
@@ -609,82 +652,37 @@ function tick(){
 setInterval(tick,1000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick();});
 
-/* ---------- remote store ---------- */
-function goLocal(){
-  st.mode='local';st.synced=true;st.slow=false;
-  renderAll();
-}
-async function connect(){
-  const c=window.claude;
-  if(!c||typeof c.use!=='function'){goLocal();return;}
-  let db=null,owner=false;
+/* ---------- account and cloud actions ---------- */
+$('authForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(!supabase){setAuthMessage('Serviço de nuvem indisponível. Confira sua conexão.',true);return;}
+  const email=$('authEmail').value.trim(),password=$('authPassword').value;
+  if(!email||!password){setAuthMessage('Informe e-mail e senha.',true);return;}
+  $('authSubmit').disabled=true;setAuthMessage('Aguarde…',false);
   try{
-    db=await c.use('db');
-    const u=await c.use('user');
-    owner=u?await u.isOwner():false;
-  }catch(e){db=null;}
-  if(!db||!owner){goLocal();return;}
-  st.mode='remote';st.db=db;
-  renderFoot();
-  const slowT=setTimeout(()=>{if(!st.synced){st.slow=true;renderFoot();}},10000);
-  const fail=()=>{clearTimeout(slowT);goLocal();};
-
-  db.collection('days').onSnapshot(snap=>{
-    const cache=snap.metadata.fromCache;
-    if(cache&&snap.empty&&!st.synced)return;
-    if(!cache&&snap.empty){
-      st.synced=true;st.slow=false;clearTimeout(slowT);
-      if(Object.keys(days).length)migrateDays();
-      renderAll();
-      return;
-    }
-    const next={};
-    snap.docs.forEach(doc=>{
-      const v=doc.data();
-      if(!KEY_RE.test(doc.id)||!v)return;
-      const ss=sanitizeSessions(v.sessions);
-      if(ss.length)next[doc.id]={sessions:ss};
-    });
-    days=next;
-    lsSet(LS.days,days);
-    if(!cache){st.synced=true;st.slow=false;clearTimeout(slowT);}
-    renderAll();
-  },fail);
-
-  db.doc('meta/timer').onSnapshot(s=>{
-    const cache=s.metadata.fromCache;
-    if(!s.exists){
-      if(!cache&&timer.updatedAt>0)pushTimer();
-      return;
-    }
-    const v=sanitizeTimer(s.data());
-    if(!v)return;
-    if(v.updatedAt>timer.updatedAt){
-      timer=v;lsSet(LS.timer,timer);renderAll();
-    }else if(v.updatedAt<timer.updatedAt&&!cache){
-      pushTimer();
-    }
-  },()=>{});
-
-  db.doc('meta/settings').onSnapshot(s=>{
-    const cache=s.metadata.fromCache;
-    if(!s.exists){
-      if(!cache&&JSON.stringify(settings)!==JSON.stringify(DEFAULTS))pushSettings();
-      return;
-    }
-    const v=sanitizeSettings(s.data());
-    if(!v)return;
-    if(JSON.stringify(v)!==JSON.stringify(settings)){
-      settings=v;lsSet(LS.settings,settings);
-      fillSettings();renderDerived();
-    }
-  },()=>{});
-}
-
-/* ---------- start ---------- */
+    const response=authMode==='signup'
+      ?await supabase.auth.signUp({email,password,options:{emailRedirectTo:'https://paulinrik.github.io/estudo/'}})
+      :await supabase.auth.signInWithPassword({email,password});
+    if(response.error)throw response.error;
+    if(authMode==='signup'&&response.data&&!response.data.session)
+      setAuthMessage('Conta criada. Confirme pelo link enviado ao seu e-mail e depois entre.',false);
+    else if(response.data&&response.data.session)await handleCloudSession(response.data.session);
+    else setAuthMessage('Confira seu e-mail para continuar.',false);
+  }catch(err){setAuthMessage(err.message||'Não foi possível entrar. Confira os dados e tente novamente.',true);}
+  finally{$('authSubmit').disabled=false;}
+});
+$('authModeToggle').addEventListener('click',()=>{
+  authMode=authMode==='signin'?'signup':'signin';renderAuth();
+  setAuthMessage(authMode==='signup'?'Crie sua conta com o mesmo e-mail e senha do Livro Caixa.':'Entre com a mesma conta do Livro Caixa.',false);
+});
+$('authSignOut').addEventListener('click',async()=>{
+  if(!supabase)return;
+  $('authSignOut').disabled=true;const {error}=await supabase.auth.signOut();$('authSignOut').disabled=false;
+  if(error)setAuthMessage('Não foi possível sair da conta: '+error.message,true);
+});/* ---------- start ---------- */
 buildSettings();
+renderAuth();
 renderAll();
-connect();
-})();
+initializeCloud();})();
 
 
