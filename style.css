@@ -78,6 +78,7 @@ h1{margin:0;font:700 28px/1.1 var(--f-head);letter-spacing:-.02em}
 .streak-l{color:var(--muted)}
 
 .banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 14px;border:1px dashed var(--line);border-radius:12px;background:var(--surface-2)}
+.banner[hidden]{display:none}
 .banner p{margin:0;flex:1 1 260px}
 
 .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0}
